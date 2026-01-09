@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>指紋認証システム</title>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+  
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+    
+    // Lucide Reactアイコンの代替
+    const Camera = ({size = 24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+    );
+    
+    const Upload = ({size = 24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    );
+    
+    const Check = ({size = 24, className = ""}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    );
+    
+    const X = ({size = 24, className = ""}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    );
+    
+    const Plus = ({size = 24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    );
+    
+    const Trash2 = ({size = 24}) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      </svg>
+    );
+
+    function FingerprintAuth() {
+      const [registeredPrints, setRegisteredPrints] = useState([]);
+      const [cameraActive, setCameraActive] = useState(false);
+      const [authResult, setAuthResult] = useState(null);
+      const [mode, setMode] = useState('auth');
+      const [newPrintName, setNewPrintName] = useState('');
+      const [activeTab, setActiveTab] = useState('login');
+      const [authenticatedUser, setAuthenticatedUser] = useState(null);
+      const videoRef = useRef(null);
+      const canvasRef = useRef(null);
+      const streamRef = useRef(null);
+
+      const startCamera = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: 'environment' } 
+          });
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            streamRef.current = stream;
+          }
+          setCameraActive(true);
+          setAuthResult(null);
+        } catch (err) {
+          alert('カメラへのアクセスが拒否されました');
+        }
+      };
+
+      const stopCamera = () => {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
+        setCameraActive(false);
+      };
+
+      const captureImage = () => {
+        const canvas = canvasRef.current;
+        const video = videoRef.current;
+        
+        if (canvas && video) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0);
+          return canvas.toDataURL('image/jpeg');
+        }
+        return null;
+      };
+
+      const extractFeatures = (imageData) => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+        
+        return new Promise((resolve) => {
+          img.onload = () => {
+            canvas.width = 100;
+            canvas.height = 100;
+            ctx.drawImage(img, 0, 0, 100, 100);
+            
+            const imgData = ctx.getImageData(0, 0, 100, 100);
+            const data = imgData.data;
+            
+            let hash = '';
+            for (let i = 0; i < data.length; i += 40) {
+              const gray = (data[i] + data[i+1] + data[i+2]) / 3;
+              hash += Math.floor(gray / 32).toString();
+            }
+            
+            resolve(hash);
+          };
+          img.src = imageData;
+        });
+      };
+
+      const calculateSimilarity = (hash1, hash2) => {
+        if (hash1.length !== hash2.length) return 0;
+        
+        let matches = 0;
+        for (let i = 0; i < hash1.length; i++) {
+          if (hash1[i] === hash2[i]) matches++;
+        }
+        
+        return (matches / hash1.length) * 100;
+      };
+
+      const authenticate = async () => {
+        const imageData = captureImage();
+        if (!imageData) return;
+        
+        const capturedHash = await extractFeatures(imageData);
+        
+        let bestMatch = null;
+        let highestSimilarity = 0;
+        
+        for (const print of registeredPrints) {
+          const similarity = calculateSimilarity(capturedHash, print.hash);
+          if (similarity > highestSimilarity) {
+            highestSimilarity = similarity;
+            bestMatch = print;
+          }
+        }
+        
+        if (highestSimilarity >= 70) {
+          setAuthResult({
+            success: true,
+            name: bestMatch.name,
+            similarity: highestSimilarity.toFixed(1)
+          });
+          setAuthenticatedUser(bestMatch.name);
+          setTimeout(() => {
+            setActiveTab('home');
+            setAuthResult(null);
+          }, 1000);
+        } else {
+          setAuthResult({
+            success: false,
+            similarity: highestSimilarity.toFixed(1)
+          });
+        }
+        
+        stopCamera();
+      };
+
+      const registerPrint = async () => {
+        if (!newPrintName.trim()) {
+          alert('名前を入力してください');
+          return;
+        }
+        
+        const imageData = captureImage();
+        if (!imageData) return;
+        
+        const hash = await extractFeatures(imageData);
+        
+        setRegisteredPrints([...registeredPrints, {
+          id: Date.now(),
+          name: newPrintName,
+          hash: hash,
+          image: imageData
+        }]);
+        
+        setNewPrintName('');
+        stopCamera();
+        setMode('auth');
+      };
+
+      const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          const imageData = event.target.result;
+          const hash = await extractFeatures(imageData);
+          
+          const name = prompt('この指紋の名前を入力してください:');
+          if (name) {
+            setRegisteredPrints([...registeredPrints, {
+              id: Date.now(),
+              name: name,
+              hash: hash,
+              image: imageData
+            }]);
+          }
+        };
+        reader.readAsDataURL(file);
+      };
+
+      const deletePrint = (id) => {
+        setRegisteredPrints(registeredPrints.filter(p => p.id !== id));
+      };
+
+      const logout = () => {
+        setAuthenticatedUser(null);
+        setActiveTab('login');
+        setAuthResult(null);
+      };
+
+      useEffect(() => {
+        return () => {
+          stopCamera();
+        };
+      }, []);
+
+      if (activeTab === 'home') {
+        return (
+          <div className="min-h-screen bg-gray-900 text-white p-6">
+            <div className="max-w-4xl mx-auto">
+              <div className="bg-gray-800 rounded-lg p-8 text-center">
+                <div className="mb-6">
+                  <Check size={64} className="text-green-400 mx-auto mb-4" />
+                  <h1 className="text-3xl font-bold mb-2">認証成功</h1>
+                  <p className="text-xl text-gray-300">ようこそ、{authenticatedUser}さん</p>
+                </div>
+                
+                <div className="bg-gray-700 rounded-lg p-6 mb-6">
+                  <h2 className="text-2xl font-bold mb-4">ホーム画面</h2>
+                  <p className="text-gray-400 mb-6">指紋認証に成功しました。このエリアに保護されたコンテンツを表示できます。</p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div className="bg-gray-600 rounded-lg p-4">
+                      <h3 className="font-semibold mb-2">ダッシュボード</h3>
+                      <p className="text-sm text-gray-400">システム情報を確認</p>
+                    </div>
+                    <div className="bg-gray-600 rounded-lg p-4">
+                      <h3 className="font-semibold mb-2">設定</h3>
+                      <p className="text-sm text-gray-400">アカウント設定</p>
+                    </div>
+                    <div className="bg-gray-600 rounded-lg p-4">
+                      <h3 className="font-semibold mb-2">データ</h3>
+                      <p className="text-sm text-gray-400">保護されたデータ</p>
+                    </div>
+                  </div>
+                </div>
+                
+                <button
+                  onClick={logout}
+                  className="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg font-semibold"
+                >
+                  ログアウト
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-gray-900 text-white p-6">
+          <div className="max-w-4xl mx-auto">
+            <h1 className="text-3xl font-bold mb-8 text-center">指紋認証システム</h1>
+            
+            <div className="flex gap-4 mb-6">
+              <button
+                onClick={() => { setMode('auth'); stopCamera(); setAuthResult(null); }}
+                className={`flex-1 py-3 rounded-lg font-semibold transition ${
+                  mode === 'auth' 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-gray-700 text-gray-300'
+                }`}
+              >
+                認証モード
+              </button>
+              <button
+                onClick={() => { setMode('register'); stopCamera(); setAuthResult(null); }}
+                className={`flex-1 py-3 rounded-lg font-semibold transition ${
+                  mode === 'register' 
+                    ? 'bg-green-600 text-white' 
+                    : 'bg-gray-700 text-gray-300'
+                }`}
+              >
+                登録モード
+              </button>
+            </div>
+
+            <div className="bg-gray-800 rounded-lg p-6 mb-6">
+              <div className="relative bg-black rounded-lg overflow-hidden mb-4" style={{height: '400px'}}>
+                {cameraActive ? (
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-gray-500">
+                    <Camera size={64} />
+                  </div>
+                )}
+              </div>
+              
+              <canvas ref={canvasRef} className="hidden" />
+              
+              {mode === 'auth' ? (
+                <div className="space-y-3">
+                  {!cameraActive ? (
+                    <button
+                      onClick={startCamera}
+                      className="w-full bg-blue-600 hover:bg-blue-700 py-3 rounded-lg font-semibold flex items-center justify-center gap-2"
+                    >
+                      <Camera size={20} />
+                      カメラを起動
+                    </button>
+                  ) : (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={authenticate}
+                        className="flex-1 bg-green-600 hover:bg-green-700 py-3 rounded-lg font-semibold"
+                      >
+                        認証する
+                      </button>
+                      <button
+                        onClick={stopCamera}
+                        className="flex-1 bg-gray-600 hover:bg-gray-700 py-3 rounded-lg font-semibold"
+                      >
+                        キャンセル
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {!cameraActive ? (
+                    <>
+                      <button
+                        onClick={startCamera}
+                        className="w-full bg-green-600 hover:bg-green-700 py-3 rounded-lg font-semibold flex items-center justify-center gap-2"
+                      >
+                        <Camera size={20} />
+                        カメラで登録
+                      </button>
+                      <label className="block">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleFileUpload}
+                          className="hidden"
+                        />
+                        <div className="w-full bg-gray-600 hover:bg-gray-700 py-3 rounded-lg font-semibold flex items-center justify-center gap-2 cursor-pointer">
+                          <Upload size={20} />
+                          ファイルから登録
+                        </div>
+                      </label>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        value={newPrintName}
+                        onChange={(e) => setNewPrintName(e.target.value)}
+                        placeholder="名前を入力"
+                        className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 text-white"
+                      />
+                      <div className="flex gap-3">
+                        <button
+                          onClick={registerPrint}
+                          className="flex-1 bg-green-600 hover:bg-green-700 py-3 rounded-lg font-semibold"
+                        >
+                          登録する
+                        </button>
+                        <button
+                          onClick={stopCamera}
+                          className="flex-1 bg-gray-600 hover:bg-gray-700 py-3 rounded-lg font-semibold"
+                        >
+                          キャンセル
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {authResult && (
+              <div className={`rounded-lg p-6 mb-6 ${
+                authResult.success ? 'bg-green-900/30 border border-green-600' : 'bg-red-900/30 border border-red-600'
+              }`}>
+                <div className="flex items-center gap-3 mb-2">
+                  {authResult.success ? (
+                    <>
+                      <Check size={32} className="text-green-400" />
+                      <div>
+                        <h3 className="text-xl font-bold text-green-400">認証成功</h3>
+                        <p className="text-gray-300">{authResult.name}</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <X size={32} className="text-red-400" />
+                      <div>
+                        <h3 className="text-xl font-bold text-red-400">認証失敗</h3>
+                        <p className="text-gray-300">登録された指紋と一致しません</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <p className="text-sm text-gray-400">類似度: {authResult.similarity}%</p>
+              </div>
+            )}
+
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                <Plus size={24} />
+                登録済み指紋 ({registeredPrints.length})
+              </h2>
+              
+              {registeredPrints.length === 0 ? (
+                <p className="text-gray-500 text-center py-8">登録された指紋がありません</p>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {registeredPrints.map(print => (
+                    <div key={print.id} className="bg-gray-700 rounded-lg p-4 relative">
+                      <img 
+                        src={print.image} 
+                        alt={print.name}
+                        className="w-full h-32 object-cover rounded mb-2"
+                      />
+                      <p className="font-semibold truncate">{print.name}</p>
+                      <button
+                        onClick={() => deletePrint(print.id)}
+                        className="absolute top-2 right-2 bg-red-600 hover:bg-red-700 p-2 rounded-full"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<FingerprintAuth />, document.getElementById('root'));
+  </script>
+</body>
+</html>
